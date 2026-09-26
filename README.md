@@ -41,6 +41,8 @@ ICG-boundary-detection/
 - 流程:`feature/xxx` → PR 到 `develop` → 全部通过后 `develop` → `main`
 - 医学生在网页右上角分支下拉框选 `develop` 编辑文档即可
 
+> 详细提交规则(提交到哪里、如何提交、AI 率控制)见 [提交规则.md](提交规则.md)。
+
 ## 数据红线(必读)
 
 **患者胸腔镜图像 / 视频、标注图,严禁上传 GitHub(无论公开还是私有)。**
