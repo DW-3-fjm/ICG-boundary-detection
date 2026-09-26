@@ -1,0 +1,26 @@
+# ===== 患者数据(严禁上传) =====
+data/
+*.dcm
+*.nii
+*.nii.gz
+
+# ===== 模型权重(大文件) =====
+*.pt
+*.pth
+*.onnx
+checkpoints/
+
+# ===== Python =====
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# ===== IDE / 系统 =====
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
