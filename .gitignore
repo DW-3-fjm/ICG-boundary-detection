@@ -1,5 +1,13 @@
 # ===== 患者数据(严禁上传) =====
 data/
+model/data/
+model/predictions/
+model/logs/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.m4v
 *.dcm
 *.nii
 *.nii.gz
