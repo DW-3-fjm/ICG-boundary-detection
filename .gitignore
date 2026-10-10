@@ -32,3 +32,5 @@ env/
 .idea/
 .DS_Store
 Thumbs.db
+
+model/reference/
