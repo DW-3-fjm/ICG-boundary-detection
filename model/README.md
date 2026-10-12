@@ -23,6 +23,8 @@ OpenCV BGR image/video
 
 The foreground class means **exactly whatever the human annotation encodes**. The included implementation does not decide whether the label is an ICG region, a visible intersegmental boundary, or another structure. Agree on that annotation target with the clinical team before training; those labels are not interchangeable.
 
+当前项目已确认以现有多边形内部为目标前景，Q/Z/H 表示显像前/中/后，L 表示器械。目标是在显像时显示标注目标的边界，并研究消退后的边界保持；现有静态图拟合不能验证视频中的持续定位。仅有器械标注的图片没有目标区域监督，不能当作目标区域为空的负样本。
+
 | Module | Input → output | Responsibility |
 |---|---|---|
 | `icg_pipeline.data` | paired image/mask files → normalized tensor and class-index mask | Pair by filename stem, convert nonzero mask values to foreground, resize masks with nearest-neighbor interpolation, and keep training/inference normalization consistent. Supports PNG, JPEG, TIFF, and BMP; grayscale or RGB. |
@@ -87,6 +89,8 @@ python scripts/evaluate.py --config configs/config.yaml --model checkpoints/best
 Training checkpoints include model/optimizer/scheduler state, epoch, validation metrics, and the effective configuration. Image inference writes a mask and optional overlay and returns a result dictionary. Video inference writes a video plus JSON beside it (or under the configured output folder), with frame index, status, processing milliseconds, valid-point fraction, and forward/backward error where applicable. Statuses distinguish `segmentation_supported`, `propagated`, `uninitialized_no_reliable_segmentation`, and explicit `tracking_failed:*`.
 
 Tracking limits and gates (`num_points`, minimum valid point count/fraction, forward/backward error, maximum displacement, minimum local texture, and Farneback parameters), contour area, minimum mean foreground probability, image size, channels, and output settings live in `configs/config.yaml`.
+
+Contour screening samples foreground probabilities at the native model pixels corresponding to the nearest-neighbor-resized binary mask. The returned full-resolution probability map remains bilinear for visualization; sampling that interpolated map at mask edges would mix foreground/background and make acceptance depend on output scale. This score is a heuristic, not calibrated medical confidence. The closed region contour can also include frame-crop edges; it is not automatically the desired anatomical boundary line.
 
 ## Evaluation protocol and data requirements
 

@@ -62,8 +62,18 @@ class ICGPredictor:
             mode="bilinear",
             align_corners=False,
         )[0, 0].cpu().numpy()
+        # The binary mask is resized with nearest-neighbor interpolation. Score
+        # the corresponding native pixels too: bilinear probabilities at an
+        # upscaled edge mix foreground and background and change the gate score
+        # merely because the output image is larger.
+        native_probabilities = probabilities.cpu().numpy()
+        native_height, native_width = native_probabilities.shape
+        original_height, original_width = original_size
         ranked = [
-            (contour, float(probability_map[contour[:, 0, 1], contour[:, 0, 0]].mean()))
+            (contour, float(native_probabilities[
+                contour[:, 0, 1].astype(np.int64) * native_height // original_height,
+                contour[:, 0, 0].astype(np.int64) * native_width // original_width,
+            ].mean()))
             for contour in contours
         ]
         accepted = next((contour for contour, score in ranked if score >= self.min_mean_probability), None)

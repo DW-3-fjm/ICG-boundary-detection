@@ -25,6 +25,25 @@ class ConstantSegmentation(torch.nn.Module):
         return logits
 
 
+@pytest.mark.parametrize("original_size", [(32, 32), (64, 64), (71, 113), (20, 24)])
+@pytest.mark.parametrize("threshold, accepted", [(0.7, True), (0.75, False)])
+def test_contour_gate_scores_native_mask_pixels_across_output_sizes(tmp_path, original_size, threshold, accepted):
+    config = {
+        "device": {"use_cuda": False},
+        "model": {"in_channels": 1, "out_channels": 2},
+        "data": {"image_size": [32, 32], "in_channels": 1},
+        "inference": {"min_contour_area": 10, "min_mean_probability": threshold,
+                      "output_dir": str(tmp_path / "out")},
+    }
+    predictor = ICGPredictor(config, model=ConstantSegmentation())
+    result = predictor.predict_image(np.zeros(original_size, dtype=np.uint8))
+    assert (result["selected_contour"] is not None) == accepted
+    assert result["mask"].shape == original_size
+    if accepted:
+        # Every native foreground pixel has logits [2, 3], regardless of output size.
+        assert result["segmentation_probability"] == pytest.approx(1 / (1 + np.exp(-1)), abs=1e-6)
+
+
 def test_unet_forward_preserves_spatial_size_for_odd_inputs():
     model = UNet(in_channels=1, out_channels=2, base_filters=8, depth=3)
     assert model(torch.randn(1, 1, 65, 71)).shape == (1, 2, 65, 71)
