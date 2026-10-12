@@ -1,5 +1,7 @@
 # ===== 患者数据(严禁上传) =====
 model/data/
+model/data_smoke/
+model/configs/*.local.yaml
 model/predictions/
 model/logs/
 *.mp4
@@ -22,6 +24,7 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+.venv-labelme/
 venv/
 env/
 .ipynb_checkpoints/

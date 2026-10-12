@@ -85,8 +85,11 @@ class Up(nn.Module):
         super().__init__()
         
         if bilinear:
-            self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-            self.conv = DoubleConv(in_channels, out_channels, in_channels // 2, use_batchnorm, dropout)
+            self.up = nn.Sequential(
+                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
+                nn.Conv2d(in_channels, in_channels // 2, kernel_size=1),
+            )
+            self.conv = DoubleConv(in_channels, out_channels, use_batchnorm=use_batchnorm, dropout=dropout)
         else:
             self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
             self.conv = DoubleConv(in_channels, out_channels, use_batchnorm=use_batchnorm, dropout=dropout)
@@ -230,7 +233,7 @@ class UNetWithAttention(UNet):
         self.attention_gates = nn.ModuleList()
         filters = self.base_filters * (2 ** self.depth)
         for i in range(self.depth):
-            self.attention_gates.append(AttentionGate(filters // 2, filters // 2, filters // 4))
+            self.attention_gates.append(AttentionGate(filters, filters // 2, filters // 4))
             filters //= 2
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -250,7 +253,7 @@ class UNetWithAttention(UNet):
             # Apply attention gate
             skip = skip_connections[i]
             gating_signal = x
-            skip = self.attention_gates[i](skip, gating_signal)
+            skip = self.attention_gates[i](gating_signal, skip)
             x = up(x, skip)
         
         logits = self.outc(x)
@@ -283,6 +286,7 @@ class AttentionGate(nn.Module):
     def forward(self, g: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         g1 = self.W_g(g)
         x1 = self.W_x(x)
+        g1 = F.interpolate(g1, size=x1.shape[-2:], mode='bilinear', align_corners=False)
         psi = self.relu(g1 + x1)
         psi = self.psi(psi)
         return x * psi
@@ -291,6 +295,8 @@ class AttentionGate(nn.Module):
 def create_model(config: dict) -> UNet:
     """Factory function to create U-Net model from config."""
     model_config = config['model']
+    if model_config['in_channels'] not in (1, 3) or model_config['out_channels'] != 2:
+        raise ValueError('This pipeline requires 1 or 3 input channels and 2 background/foreground output channels')
     
     if model_config.get('use_attention', False):
         model = UNetWithAttention(

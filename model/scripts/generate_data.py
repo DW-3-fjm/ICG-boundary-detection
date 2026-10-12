@@ -8,6 +8,7 @@ import argparse
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+from icg_pipeline.data import write_image, _read_image
 
 
 def generate_synthetic_icg_data(
@@ -51,8 +52,8 @@ def generate_synthetic_icg_data(
             img_path = output_dir / split / 'images' / f'sample_{sample_idx:05d}.png'
             mask_path = output_dir / split / 'masks' / f'sample_{sample_idx:05d}.png'
             
-            cv2.imwrite(str(img_path), image)
-            cv2.imwrite(str(mask_path), mask)
+            write_image(str(img_path), image)
+            write_image(str(mask_path), mask)
             
             sample_idx += 1
     
@@ -138,7 +139,7 @@ def create_video_from_samples(data_dir: str, output_path: str, fps: int = 30, du
         return
     
     # Read first frame to get size
-    first_frame = cv2.imread(str(image_files[0]), cv2.IMREAD_GRAYSCALE)
+    first_frame = _read_image(image_files[0], 1)
     h, w = first_frame.shape
     
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -147,7 +148,7 @@ def create_video_from_samples(data_dir: str, output_path: str, fps: int = 30, du
     total_frames = int(fps * duration)
     for i in range(total_frames):
         idx = i % len(image_files)
-        frame = cv2.imread(str(image_files[idx]), cv2.IMREAD_GRAYSCALE)
+        frame = _read_image(image_files[idx], 1)
         out.write(frame)
     
     out.release()

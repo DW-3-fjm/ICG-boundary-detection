@@ -12,7 +12,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from icg_pipeline import ICGDataset, OpticalFlowTracker, UNet, contour_to_points, extract_contours
-from icg_pipeline.data import postprocess_mask, preprocess_image
+from icg_pipeline.data import write_image, postprocess_mask, preprocess_image
 from icg_pipeline.eval import Evaluator
 from icg_pipeline.inference import ICGPredictor
 
@@ -55,8 +55,8 @@ def test_dataset_pairs_by_stem_and_binarizes_annotation(tmp_path):
     image = np.full((12, 14), 128, np.uint8)
     mask = np.zeros((12, 14), np.uint8)
     mask[3:8, 4:10] = 127
-    cv2.imwrite(str(tmp_path / "images" / "case.png"), image)
-    cv2.imwrite(str(tmp_path / "masks" / "case.png"), mask)
+    write_image(str(tmp_path / "images" / "case.png"), image)
+    write_image(str(tmp_path / "masks" / "case.png"), mask)
     item = ICGDataset(str(tmp_path), image_size=(16, 18), is_train=False)[0]
     assert item["image"].shape == (1, 16, 18)
     assert item["mask"].dtype == torch.long
@@ -67,7 +67,7 @@ def test_dataset_pairs_by_stem_and_binarizes_annotation(tmp_path):
 def test_dataset_rejects_missing_masks_instead_of_making_empty_targets(tmp_path):
     (tmp_path / "images").mkdir()
     (tmp_path / "masks").mkdir()
-    cv2.imwrite(str(tmp_path / "images" / "case.png"), np.zeros((8, 8), np.uint8))
+    write_image(str(tmp_path / "images" / "case.png"), np.zeros((8, 8), np.uint8))
     with pytest.raises(ValueError, match="Missing masks"):
         ICGDataset(str(tmp_path))
 
@@ -171,6 +171,9 @@ def test_video_reinitializes_on_segmentation_and_logs_propagation_failure(tmp_pa
     assert statuses[1] == "propagated"
     assert statuses[2].startswith("tracking_failed:")
     assert result["frames"][2]["tracked_contour"] is None
+    assert 'mask' not in result['frames'][0]
+    assert 'probability_map' not in result['frames'][0]
+    assert result['frames'][0]['end_to_end_time_ms'] >= result['frames'][0]['processing_time_ms']
     assert output.is_file()
     saved = json.loads(Path(result["metadata_path"]).read_text(encoding="utf-8"))
     assert len(saved["frames"]) == 3
@@ -224,8 +227,8 @@ def test_one_epoch_training_checkpoint_and_single_image_inference(tmp_path):
             mask = np.zeros_like(image)
             mask[10:22, 10:22] = 255
             name = f"sample_{index}.png"
-            cv2.imwrite(str(tmp_path / "data" / split / "images" / name), image)
-            cv2.imwrite(str(tmp_path / "data" / split / "masks" / name), mask)
+            write_image(str(tmp_path / "data" / split / "images" / name), image)
+            write_image(str(tmp_path / "data" / split / "masks" / name), mask)
 
     config = {
         "data": {

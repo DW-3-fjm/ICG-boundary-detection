@@ -1,5 +1,9 @@
 # ICG boundary-perception research baseline
 
+本轮代码审查、本机配置、效率测量及真实数据到位后的训练步骤见 [代码审查与训练准备](TRAINING_READY_CN.md)。12 GB 显存笔记本的保守配置为 `configs/laptop.yaml`。
+
+LabelMe JSON 转换、时相标签处理、未知标签整张排除和单患者 `--overfit` 检查见 [LabelMe 数据准备](LABELME_TRAINING_CN.md)。单患者训练集拟合分数不能作为独立患者评估。
+
 This directory contains a deliberately small, **experimental** baseline for segmenting an annotated foreground in ICG frames and propagating a contour through video with OpenCV dense Farneback optical flow.
 
 It is not a validated medical device. It does not infer a surgical margin from arbitrary fluorescent regions and cannot recover an unobservable or arbitrarily deformed boundary. A propagated contour is explicitly labelled as an estimate, and is suppressed when basic tracking checks fail.
@@ -49,6 +53,8 @@ data/
 ```
 
 Images without paired masks are rejected: the loader never invents empty labels. The included synthetic generator is only a software exercise and is **not** clinical training data.
+
+Images must be uint8 grayscale or three-channel data. Masks must be uint8 single-channel, with background zero and at most one positive foreground value. Color overlays, multiclass masks, high-bit-depth inputs and ambiguous stem matches are rejected. `scripts/convert_labelme.py` converts explicitly mapped, filled LabelMe polygons using a private patient-group CSV; source files remain unchanged.
 
 ## Commands
 

@@ -2,7 +2,7 @@
 
 import numpy as np
 import torch
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional, Iterable
 from scipy.spatial.distance import directed_hausdorff
 import cv2
 import logging
@@ -78,13 +78,13 @@ def compute_accuracy(pred: np.ndarray, target: np.ndarray) -> float:
     return correct / pred.size
 
 
-def compute_hausdorff_distance(pred: np.ndarray, target: np.ndarray, percentile: float = 95) -> float:
+def compute_hausdorff_distance(pred: np.ndarray, target: np.ndarray, percentile: float = 100) -> float:
     """Compute Hausdorff distance between contours.
     
     Args:
         pred: Predicted binary mask
         target: Ground truth binary mask
-        percentile: Percentile for robust Hausdorff (default: 95 for HD95)
+        percentile: 100 for maximum Hausdorff; lower values use directional percentiles
         
     Returns:
         Hausdorff distance in pixels
@@ -99,6 +99,13 @@ def compute_hausdorff_distance(pred: np.ndarray, target: np.ndarray, percentile:
     if len(pred_contours) == 0 or len(target_contours) == 0:
         return float('inf')
     
+    if not 0 < percentile <= 100:
+        raise ValueError('percentile must be in (0, 100]')
+    if percentile < 100:
+        from scipy.spatial import cKDTree
+        a = cKDTree(target_contours).query(pred_contours)[0]
+        b = cKDTree(pred_contours).query(target_contours)[0]
+        return float(max(np.percentile(a, percentile), np.percentile(b, percentile)))
     # Compute directed Hausdorff distances
     d1 = directed_hausdorff(pred_contours, target_contours)[0]
     d2 = directed_hausdorff(target_contours, pred_contours)[0]
@@ -117,13 +124,10 @@ def compute_hausdorff_distance_95(pred: np.ndarray, target: np.ndarray) -> float
     if len(pred_contours) == 0 or len(target_contours) == 0:
         return float('inf')
     
-    # Compute all pairwise distances
-    from scipy.spatial.distance import cdist
-    distances = cdist(pred_contours, target_contours)
-    
-    # Get 95th percentile of minimum distances
-    min_dist_pred = distances.min(axis=1)
-    min_dist_target = distances.min(axis=0)
+    # Nearest-boundary distances without allocating a quadratic pairwise matrix.
+    from scipy.spatial import cKDTree
+    min_dist_pred = cKDTree(target_contours).query(pred_contours)[0]
+    min_dist_target = cKDTree(pred_contours).query(target_contours)[0]
     
     hd95_pred = np.percentile(min_dist_pred, 95)
     hd95_target = np.percentile(min_dist_target, 95)
@@ -148,11 +152,9 @@ def compute_surface_distance(pred: np.ndarray, target: np.ndarray) -> Dict[str, 
             'max_surface_distance': float('inf')
         }
     
-    from scipy.spatial.distance import cdist
-    distances = cdist(pred_contours, target_contours)
-    
-    min_dist_pred = distances.min(axis=1)
-    min_dist_target = distances.min(axis=0)
+    from scipy.spatial import cKDTree
+    min_dist_pred = cKDTree(target_contours).query(pred_contours)[0]
+    min_dist_target = cKDTree(pred_contours).query(target_contours)[0]
     all_distances = np.concatenate([min_dist_pred, min_dist_target])
     
     return {
@@ -206,7 +208,7 @@ def evaluate_segmentation(
     """Evaluate segmentation with multiple metrics.
     
     Args:
-        pred: Predicted mask (H, W) or (H, W, C)
+        pred: Predicted binary mask (H, W)
         target: Ground truth mask (H, W)
         metrics: List of metrics to compute (default: all)
         
@@ -216,6 +218,12 @@ def evaluate_segmentation(
     if metrics is None:
         metrics = ['dice', 'iou', 'precision', 'recall', 'specificity', 'accuracy', 
                    'hausdorff', 'hausdorff_95', 'surface_distance']
+    if pred.ndim != 2 or pred.shape != target.shape or not pred.size:
+        raise ValueError('Prediction and target must be nonempty 2D masks of equal shape')
+    supported = {'dice', 'iou', 'precision', 'recall', 'specificity', 'accuracy',
+                 'hausdorff', 'hausdorff_95', 'surface_distance'}
+    if set(metrics) - supported:
+        raise ValueError(f'Unknown evaluation metrics: {set(metrics) - supported}')
     
     results = {}
     
@@ -326,7 +334,7 @@ class Evaluator:
         self.config = config
         self.metrics_config = config.get('evaluation', {})
         self.metrics_to_compute = self.metrics_config.get('metrics', [
-            'dice', 'iou', 'precision', 'recall', 'hausdorff_distance', 'surface_distance'
+            'dice', 'iou', 'precision', 'recall', 'hausdorff', 'surface_distance'
         ])
     
     def evaluate_dataset(
@@ -337,26 +345,39 @@ class Evaluator:
         """Evaluate predictions against ground truth for a dataset."""
         if len(predictions) != len(ground_truths):
             raise ValueError("Predictions and ground truths must have equal length")
-        if not predictions:
-            raise ValueError("Cannot evaluate an empty dataset")
+        return self.evaluate_pairs(zip(predictions, ground_truths))
+
+    def evaluate_pairs(self, pairs: Iterable[Tuple[Dict[str, Any], np.ndarray]]) -> Dict[str, Any]:
+        """Stream masks, retaining only per-sample scalar metrics in memory."""
         all_metrics = []
-        
-        for pred, gt in zip(predictions, ground_truths):
+        for pred, gt in pairs:
             pred_mask = pred['mask']
+            if pred_mask.shape != gt.shape:
+                raise ValueError(f"Prediction/reference shape mismatch: {pred_mask.shape} versus {gt.shape}")
             metrics = evaluate_segmentation(pred_mask, gt, self.metrics_to_compute)
+            if 'image_path' in pred:
+                metrics['image_path'] = pred['image_path']
             all_metrics.append(metrics)
+        if not all_metrics:
+            raise ValueError("Cannot evaluate an empty dataset")
         
         # Aggregate
         aggregated = {}
         for key in all_metrics[0].keys():
-            values = [m[key] for m in all_metrics if np.isfinite(m[key])]
+            if key == 'image_path':
+                continue
+            full_values = [m[key] for m in all_metrics]
+            values = [v for v in full_values if np.isfinite(v)]
+            aggregated[f'nonfinite_count_{key}'] = len(full_values) - len(values)
             if values:
-                aggregated[f'mean_{key}'] = float(np.mean(values))
-                aggregated[f'std_{key}'] = float(np.std(values))
-                aggregated[f'median_{key}'] = float(np.median(values))
+                # Never silently discard failed/empty predictions from overall scores.
+                aggregated[f'mean_{key}'] = float(np.mean(full_values))
+                aggregated[f'std_{key}'] = float(np.std(values)) if len(values) == len(full_values) else float('nan')
+                aggregated[f'median_{key}'] = float(np.median(full_values))
+                aggregated[f'finite_mean_{key}'] = float(np.mean(values))
             else:
                 aggregated[f'mean_{key}'] = float('inf')
-                aggregated[f'std_{key}'] = 0.0
+                aggregated[f'std_{key}'] = float('nan')
                 aggregated[f'median_{key}'] = float('inf')
         
         return {

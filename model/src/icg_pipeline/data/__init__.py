@@ -13,14 +13,46 @@ logger = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
 
 
+def write_image(path: str, image: np.ndarray) -> None:
+    """Encode via OpenCV and write via Python to support Windows Unicode paths."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    ok, encoded = cv2.imencode(destination.suffix, image)
+    if not ok:
+        raise OSError(f"Could not encode image: {destination}")
+    encoded.tofile(destination)
+
+
 def _read_image(path: Path, channels: int) -> np.ndarray:
-    mode = cv2.IMREAD_GRAYSCALE if channels == 1 else cv2.IMREAD_COLOR
-    image = cv2.imread(str(path), mode)
-    if image is None:
-        raise ValueError(f"Could not load image: {path}")
-    if channels == 3:
+    image = read_source_image(path)
+    if channels == 1 and image.ndim == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    elif channels == 3 and image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+    elif channels == 3:
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     return image
+
+
+def read_source_image(path: Path) -> np.ndarray:
+    """Read uint8 grayscale/BGR data without silently reducing depth or channels."""
+    image = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise ValueError(f"Could not load image: {path}")
+    if image.dtype != np.uint8 or not (image.ndim == 2 or image.ndim == 3 and image.shape[2] == 3):
+        raise ValueError(f"Expected an 8-bit grayscale or BGR image: {path}")
+    return image
+
+
+def read_binary_mask(path: Path) -> np.ndarray:
+    """Reject color overlays, high-bit-depth masks and multiclass annotations."""
+    mask = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    if mask is None or mask.dtype != np.uint8 or mask.ndim != 2:
+        raise ValueError(f"Expected an 8-bit single-channel binary mask: {path}")
+    values = np.unique(mask)
+    if len(values) > 2 or len(values) == 2 and values[0] != 0:
+        raise ValueError(f"Mask must encode background=0 and one foreground value: {path}")
+    return mask
 
 
 def preprocess_image(
@@ -31,6 +63,8 @@ def preprocess_image(
     """Convert an OpenCV image into normalized CHW model input (size is H, W)."""
     if channels not in (1, 3):
         raise ValueError(f"channels must be 1 or 3, got {channels}")
+    if image.dtype != np.uint8 or not (image.ndim == 2 or image.ndim == 3 and image.shape[2] == 3):
+        raise ValueError("Expected an 8-bit grayscale or BGR image")
     if image.ndim == 3 and channels == 1:
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     elif image.ndim == 2 and channels == 3:
@@ -62,6 +96,10 @@ class ICGDataset(Dataset):
         self.image_size = tuple(image_size)
         self.is_train = is_train
         self.channels = channels
+        if channels not in (1, 3):
+            raise ValueError("channels must be 1 or 3")
+        if not self.data_dir.is_dir():
+            raise ValueError(f"Dataset directory does not exist: {self.data_dir}")
         image_dir, mask_dir = self.data_dir / "images", self.data_dir / "masks"
         if image_dir.is_dir() and mask_dir.is_dir():
             pairs = [
@@ -83,17 +121,23 @@ class ICGDataset(Dataset):
             pairs = [(image, mask) for image, mask in pairs if mask is not None]
         if not pairs:
             raise ValueError(f"No {'image/mask pairs' if require_masks else 'images'} found in {self.data_dir}")
+        stems = [image.stem.casefold() for image, _ in pairs]
+        if len(stems) != len(set(stems)):
+            raise ValueError("Ambiguous duplicate image stem in dataset")
         self.pairs = pairs
         self.augmentations = augmentations
         logger.info("Loaded %d image/mask pairs from %s", len(pairs), self.data_dir)
 
     @staticmethod
     def _mask_for(directory: Path, stem: str, suffix: str = "") -> Optional[Path]:
-        for ext in (".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"):
-            candidate = directory / f"{stem}{suffix}{ext}"
-            if candidate.is_file():
-                return candidate
-        return None
+        if not directory.is_dir():
+            return None
+        matches = [p for p in directory.iterdir() if p.is_file()
+                   and p.stem.casefold() == f"{stem}{suffix}".casefold()
+                   and p.suffix.lower() in IMAGE_EXTENSIONS]
+        if len(matches) > 1:
+            raise ValueError(f"Ambiguous masks for image stem: {stem}")
+        return matches[0] if matches else None
 
     def __len__(self) -> int:
         return len(self.pairs)
@@ -103,24 +147,34 @@ class ICGDataset(Dataset):
         image = _read_image(image_path, self.channels)
         if mask_path is None:
             raise ValueError(f"Missing annotation for training sample: {image_path}")
-        mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
-        if mask is None:
-            raise ValueError(f"Could not load mask: {mask_path}")
+        mask = read_binary_mask(mask_path)
         if mask.shape != image.shape[:2]:
             raise ValueError(f"Image/mask size mismatch: {image_path} and {mask_path}")
         mask = (mask > 0).astype(np.uint8)
         height, width = self.image_size
         image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA if image.shape[0] > height else cv2.INTER_LINEAR)
         mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
-        if self.is_train:
-            if np.random.random() < 0.5:
+        if self.is_train and isinstance(self.augmentations, dict):
+            aug = self.augmentations
+            if np.random.random() < float(aug.get("horizontal_flip", 0)):
                 image, mask = cv2.flip(image, 1), cv2.flip(mask, 1)
-            if np.random.random() < 0.5:
+            if np.random.random() < float(aug.get("vertical_flip", 0)):
                 image, mask = cv2.flip(image, 0), cv2.flip(mask, 0)
-            if self.image_size[0] == self.image_size[1]:
-                rotations = np.random.randint(4)
-                image, mask = np.rot90(image, rotations), np.rot90(mask, rotations)
-        if self.augmentations is not None:
+            angle = float(aug.get("rotation", 0))
+            if angle:
+                matrix = cv2.getRotationMatrix2D(((width-1)/2, (height-1)/2), np.random.uniform(-angle, angle), 1)
+                image = cv2.warpAffine(image, matrix, (width, height), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
+                mask = cv2.warpAffine(mask, matrix, (width, height), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_REFLECT_101)
+            image = image.astype(np.float32) / 255.0
+            contrast = float(aug.get("contrast", 0))
+            brightness = float(aug.get("brightness", 0))
+            noise = float(aug.get("gaussian_noise", 0))
+            image = (image - 0.5) * np.random.uniform(1-contrast, 1+contrast) + 0.5
+            image += np.random.uniform(-brightness, brightness)
+            if noise:
+                image += np.random.normal(0, noise, image.shape)
+            image = np.clip(image * 255.0, 0, 255)
+        if self.is_train and callable(self.augmentations):
             transformed = self.augmentations(image=image, mask=mask)
             image, mask = transformed["image"], transformed["mask"]
             if isinstance(image, torch.Tensor):
@@ -141,29 +195,29 @@ class ICGDataset(Dataset):
         }
 
 
-def get_dataloaders(config: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, DataLoader]:
+def get_dataloader(config: Dict[str, Any], split: str, training: bool = False) -> DataLoader:
+    """Load only the requested split; evaluation never augments or drops samples."""
+    if split not in ("train", "val", "test"):
+        raise ValueError(f"Unknown data split: {split}")
     data = config["data"]
     channels = int(data.get("in_channels", config.get("model", {}).get("in_channels", 1)))
-    options = {
-        "image_size": tuple(data["image_size"]),
-        "channels": channels,
-    }
-    datasets = [
-        ICGDataset(data[key], is_train=(key == "train_data_dir"), **options)
-        for key in ("train_data_dir", "val_data_dir", "test_data_dir")
-    ]
-    loaders = [
-        DataLoader(
-            dataset,
-            batch_size=data["batch_size"],
-            shuffle=index == 0,
-            num_workers=data.get("num_workers", 0),
-            pin_memory=data.get("pin_memory", False),
-            drop_last=index == 0 and len(dataset) >= data["batch_size"],
-        )
-        for index, dataset in enumerate(datasets)
-    ]
-    return tuple(loaders)
+    model_channels = int(config.get("model", {}).get("in_channels", channels))
+    if channels != model_channels:
+        raise ValueError("data.in_channels must match model.in_channels")
+    dataset = ICGDataset(
+        data[f"{split}_data_dir"], image_size=tuple(data["image_size"]),
+        channels=channels, is_train=training,
+        augmentations=data.get("augmentations", {}) if training else None,
+    )
+    return DataLoader(
+        dataset, batch_size=data["batch_size"], shuffle=training,
+        num_workers=data.get("num_workers", 0), pin_memory=data.get("pin_memory", False),
+        drop_last=False,
+    )
+
+
+def get_dataloaders(config: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    return tuple(get_dataloader(config, split, training=split == "train") for split in ("train", "val", "test"))
 
 
 def postprocess_mask(
