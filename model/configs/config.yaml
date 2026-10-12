@@ -35,13 +35,13 @@ model:
 training:
   epochs: 100
   seed: 42
-  learning_rate: 1e-4
-  weight_decay: 1e-5
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-5
   optimizer: "adamw"
   scheduler: "cosine_annealing"
   scheduler_params:
     T_max: 100
-    eta_min: 1e-6
+    eta_min: 1.0e-6
   loss_function: "dice_ce"
   loss_params:
     dice_weight: 0.5
@@ -50,7 +50,7 @@ training:
   mixed_precision: true
   early_stopping:
     patience: 15
-    min_delta: 1e-4
+    min_delta: 1.0e-4
   checkpoint_dir: "checkpoints"
   save_top_k: 3
   monitor_metric: "val_dice"

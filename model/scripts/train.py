@@ -19,11 +19,14 @@ def main():
                         help='Path to checkpoint to resume from')
     parser.add_argument('--device', type=str, default=None, choices=['cpu', 'cuda'],
                         help='Override device (cuda/cpu)')
+    parser.add_argument('--overfit', action='store_true', help='Evaluate training images only; not independent validation')
     
     args = parser.parse_args()
     
     # Load config
     config = load_config(args.config)
+    if args.overfit:
+        config['training']['overfit_only'] = True
     
     # Override device if specified
     if args.device:
@@ -39,7 +42,8 @@ def main():
     # Run training
     results = trainer.train()
     
-    print(f"Training completed. Best validation Dice: {results['best_val_dice']:.4f}")
+    label = 'training-fit Dice (NOT independent validation)' if trainer.overfit_only else 'validation Dice'
+    print(f"Training completed. Best {label}: {results['best_val_dice']:.4f}")
 
 
 if __name__ == '__main__':

@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import torch
 
-from ..data import contour_to_points, extract_contours, postprocess_mask, preprocess_image
+from ..data import contour_to_points, extract_contours, postprocess_mask, preprocess_image, write_image, read_source_image
 from ..models import create_model
 from ..tracking import OpticalFlowTracker
 from ..utils import get_device, load_checkpoint, load_config
@@ -26,13 +26,17 @@ class ICGPredictor:
         self.device = get_device(config["device"])
         self.model = (model or create_model(config)).to(self.device)
         model_path = config.get("inference", {}).get("model_path")
+        self.checkpoint_training_mode = None
         if model is None:
             if not model_path or not Path(model_path).is_file():
                 raise FileNotFoundError(f"Model checkpoint not found: {model_path}")
-            load_checkpoint(model_path, self.model)
+            checkpoint = load_checkpoint(model_path, self.model)
+            self.checkpoint_training_mode = checkpoint.get('training_mode', 'train_val')
         self.model.eval()
         self.image_size = tuple(config["data"]["image_size"])
         self.channels = int(config["data"].get("in_channels", config["model"].get("in_channels", 1)))
+        if self.channels != int(config['model'].get('in_channels', self.channels)):
+            raise ValueError('data.in_channels must match model.in_channels')
         self.min_contour_area = float(config.get("inference", {}).get("min_contour_area", 100))
         self.min_mean_probability = float(config.get("inference", {}).get("min_mean_probability", 0.55))
         self.tracking_enabled = bool(config.get("tracking", {}).get("enabled", True))
@@ -58,8 +62,18 @@ class ICGPredictor:
             mode="bilinear",
             align_corners=False,
         )[0, 0].cpu().numpy()
+        # The binary mask is resized with nearest-neighbor interpolation. Score
+        # the corresponding native pixels too: bilinear probabilities at an
+        # upscaled edge mix foreground and background and change the gate score
+        # merely because the output image is larger.
+        native_probabilities = probabilities.cpu().numpy()
+        native_height, native_width = native_probabilities.shape
+        original_height, original_width = original_size
         ranked = [
-            (contour, float(probability_map[contour[:, 0, 1], contour[:, 0, 0]].mean()))
+            (contour, float(native_probabilities[
+                contour[:, 0, 1].astype(np.int64) * native_height // original_height,
+                contour[:, 0, 0].astype(np.int64) * native_width // original_width,
+            ].mean()))
             for contour in contours
         ]
         accepted = next((contour for contour, score in ranked if score >= self.min_mean_probability), None)
@@ -107,6 +121,7 @@ class ICGPredictor:
         video_path: str,
         output_path: Optional[str] = None,
         track_contours: bool = True,
+        retain_frame_arrays: bool = False,
     ) -> Dict[str, Any]:
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
@@ -133,6 +148,7 @@ class ICGPredictor:
         frame_idx = 0
         try:
             while True:
+                frame_started = time.perf_counter()
                 ok, frame = cap.read()
                 if not ok:
                     break
@@ -193,7 +209,12 @@ class ICGPredictor:
                     if result["tracked_contour"] is None and result.get("selected_contour") is not None:
                         result["tracking_status"] = "tracking_failed_untrusted_segmentation"
                     writer.write(self.create_overlay(frame, result))
-                results.append(result)
+                result['end_to_end_time_ms'] = (time.perf_counter() - frame_started) * 1000
+                # Long videos must not accumulate full-resolution probability maps/masks.
+                results.append(result if retain_frame_arrays else {
+                    key: value for key, value in result.items()
+                    if key not in {'mask', 'probability_map', 'contours', 'contour_points', 'selected_contour'}
+                })
                 frame_idx += 1
         finally:
             cap.release()
@@ -205,6 +226,7 @@ class ICGPredictor:
             "frame_count": frame_idx,
             "mean_processing_time_ms": mean_ms,
             "mean_fps": 1000.0 / mean_ms if mean_ms > 0 else 0.0,
+            "mean_end_to_end_time_ms": float(np.mean([r['end_to_end_time_ms'] for r in results])) if results else 0.0,
             "output_video": str(output_path) if output_path else None,
         }
         if output_path is not None:
@@ -240,19 +262,15 @@ def run_inference(
     if path.suffix.lower() in {".mp4", ".avi", ".mov", ".mkv", ".m4v"}:
         output = output_path or str(predictor.output_dir / f"{path.stem}_overlay.mp4")
         return predictor.predict_video(str(path), output)
-    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    if image is None:
-        raise ValueError(f"Could not load image: {path}")
+    image = read_source_image(path)
     result = predictor.predict_image(image)
     result["tracking_status"] = "segmentation_supported" if result["selected_contour"] is not None else "no_segmentation"
     mask_path = predictor.output_dir / f"{path.stem}_mask.png"
-    if not cv2.imwrite(str(mask_path), result["mask"]):
-        raise OSError(f"Could not write mask: {mask_path}")
+    write_image(str(mask_path), result["mask"])
     if predictor.save_overlay or output_path:
         overlay_path = Path(output_path) if output_path else predictor.output_dir / f"{path.stem}_overlay.png"
         overlay_path.parent.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(overlay_path), predictor.create_overlay(image, result)):
-            raise OSError(f"Could not write overlay: {overlay_path}")
+        write_image(str(overlay_path), predictor.create_overlay(image, result))
         result["overlay_path"] = str(overlay_path)
     result["mask_path"] = str(mask_path)
     return result

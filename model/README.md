@@ -1,5 +1,9 @@
 # ICG boundary-perception research baseline
 
+本轮代码审查、本机配置、效率测量及真实数据到位后的训练步骤见 [代码审查与训练准备](TRAINING_READY_CN.md)。12 GB 显存笔记本的保守配置为 `configs/laptop.yaml`。
+
+LabelMe JSON 转换、时相标签处理、未知标签整张排除和单患者 `--overfit` 检查见 [LabelMe 数据准备](LABELME_TRAINING_CN.md)。单患者训练集拟合分数不能作为独立患者评估。
+
 This directory contains a deliberately small, **experimental** baseline for segmenting an annotated foreground in ICG frames and propagating a contour through video with OpenCV dense Farneback optical flow.
 
 It is not a validated medical device. It does not infer a surgical margin from arbitrary fluorescent regions and cannot recover an unobservable or arbitrarily deformed boundary. A propagated contour is explicitly labelled as an estimate, and is suppressed when basic tracking checks fail.
@@ -18,6 +22,8 @@ OpenCV BGR image/video
 ```
 
 The foreground class means **exactly whatever the human annotation encodes**. The included implementation does not decide whether the label is an ICG region, a visible intersegmental boundary, or another structure. Agree on that annotation target with the clinical team before training; those labels are not interchangeable.
+
+当前项目已确认以现有多边形内部为目标前景，Q/Z/H 表示显像前/中/后，L 表示器械。目标是在显像时显示标注目标的边界，并研究消退后的边界保持；现有静态图拟合不能验证视频中的持续定位。仅有器械标注的图片没有目标区域监督，不能当作目标区域为空的负样本。
 
 | Module | Input → output | Responsibility |
 |---|---|---|
@@ -50,6 +56,8 @@ data/
 
 Images without paired masks are rejected: the loader never invents empty labels. The included synthetic generator is only a software exercise and is **not** clinical training data.
 
+Images must be uint8 grayscale or three-channel data. Masks must be uint8 single-channel, with background zero and at most one positive foreground value. Color overlays, multiclass masks, high-bit-depth inputs and ambiguous stem matches are rejected. `scripts/convert_labelme.py` converts explicitly mapped, filled LabelMe polygons using a private patient-group CSV; source files remain unchanged.
+
 ## Commands
 
 Run these from `model/`; scripts also accept absolute configuration/data paths.
@@ -81,6 +89,8 @@ python scripts/evaluate.py --config configs/config.yaml --model checkpoints/best
 Training checkpoints include model/optimizer/scheduler state, epoch, validation metrics, and the effective configuration. Image inference writes a mask and optional overlay and returns a result dictionary. Video inference writes a video plus JSON beside it (or under the configured output folder), with frame index, status, processing milliseconds, valid-point fraction, and forward/backward error where applicable. Statuses distinguish `segmentation_supported`, `propagated`, `uninitialized_no_reliable_segmentation`, and explicit `tracking_failed:*`.
 
 Tracking limits and gates (`num_points`, minimum valid point count/fraction, forward/backward error, maximum displacement, minimum local texture, and Farneback parameters), contour area, minimum mean foreground probability, image size, channels, and output settings live in `configs/config.yaml`.
+
+Contour screening samples foreground probabilities at the native model pixels corresponding to the nearest-neighbor-resized binary mask. The returned full-resolution probability map remains bilinear for visualization; sampling that interpolated map at mask edges would mix foreground/background and make acceptance depend on output scale. This score is a heuristic, not calibrated medical confidence. The closed region contour can also include frame-crop edges; it is not automatically the desired anatomical boundary line.
 
 ## Evaluation protocol and data requirements
 

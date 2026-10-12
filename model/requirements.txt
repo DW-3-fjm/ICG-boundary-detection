@@ -1,7 +1,8 @@
 # ICG Pipeline Requirements
 
 # Core
-torch>=2.0.0
+# RTX 50-series: first install the documented CUDA 12.8 build (see TRAINING_READY_CN.md).
+torch>=2.7.0
 numpy>=1.24.0
 opencv-python>=4.8.0
 

@@ -12,7 +12,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from icg_pipeline import ICGDataset, OpticalFlowTracker, UNet, contour_to_points, extract_contours
-from icg_pipeline.data import postprocess_mask, preprocess_image
+from icg_pipeline.data import write_image, postprocess_mask, preprocess_image
 from icg_pipeline.eval import Evaluator
 from icg_pipeline.inference import ICGPredictor
 
@@ -23,6 +23,25 @@ class ConstantSegmentation(torch.nn.Module):
         logits[:, 0] = 2.0
         logits[:, 1, 8:24, 10:30] = 3.0
         return logits
+
+
+@pytest.mark.parametrize("original_size", [(32, 32), (64, 64), (71, 113), (20, 24)])
+@pytest.mark.parametrize("threshold, accepted", [(0.7, True), (0.75, False)])
+def test_contour_gate_scores_native_mask_pixels_across_output_sizes(tmp_path, original_size, threshold, accepted):
+    config = {
+        "device": {"use_cuda": False},
+        "model": {"in_channels": 1, "out_channels": 2},
+        "data": {"image_size": [32, 32], "in_channels": 1},
+        "inference": {"min_contour_area": 10, "min_mean_probability": threshold,
+                      "output_dir": str(tmp_path / "out")},
+    }
+    predictor = ICGPredictor(config, model=ConstantSegmentation())
+    result = predictor.predict_image(np.zeros(original_size, dtype=np.uint8))
+    assert (result["selected_contour"] is not None) == accepted
+    assert result["mask"].shape == original_size
+    if accepted:
+        # Every native foreground pixel has logits [2, 3], regardless of output size.
+        assert result["segmentation_probability"] == pytest.approx(1 / (1 + np.exp(-1)), abs=1e-6)
 
 
 def test_unet_forward_preserves_spatial_size_for_odd_inputs():
@@ -55,8 +74,8 @@ def test_dataset_pairs_by_stem_and_binarizes_annotation(tmp_path):
     image = np.full((12, 14), 128, np.uint8)
     mask = np.zeros((12, 14), np.uint8)
     mask[3:8, 4:10] = 127
-    cv2.imwrite(str(tmp_path / "images" / "case.png"), image)
-    cv2.imwrite(str(tmp_path / "masks" / "case.png"), mask)
+    write_image(str(tmp_path / "images" / "case.png"), image)
+    write_image(str(tmp_path / "masks" / "case.png"), mask)
     item = ICGDataset(str(tmp_path), image_size=(16, 18), is_train=False)[0]
     assert item["image"].shape == (1, 16, 18)
     assert item["mask"].dtype == torch.long
@@ -67,7 +86,7 @@ def test_dataset_pairs_by_stem_and_binarizes_annotation(tmp_path):
 def test_dataset_rejects_missing_masks_instead_of_making_empty_targets(tmp_path):
     (tmp_path / "images").mkdir()
     (tmp_path / "masks").mkdir()
-    cv2.imwrite(str(tmp_path / "images" / "case.png"), np.zeros((8, 8), np.uint8))
+    write_image(str(tmp_path / "images" / "case.png"), np.zeros((8, 8), np.uint8))
     with pytest.raises(ValueError, match="Missing masks"):
         ICGDataset(str(tmp_path))
 
@@ -171,6 +190,9 @@ def test_video_reinitializes_on_segmentation_and_logs_propagation_failure(tmp_pa
     assert statuses[1] == "propagated"
     assert statuses[2].startswith("tracking_failed:")
     assert result["frames"][2]["tracked_contour"] is None
+    assert 'mask' not in result['frames'][0]
+    assert 'probability_map' not in result['frames'][0]
+    assert result['frames'][0]['end_to_end_time_ms'] >= result['frames'][0]['processing_time_ms']
     assert output.is_file()
     saved = json.loads(Path(result["metadata_path"]).read_text(encoding="utf-8"))
     assert len(saved["frames"]) == 3
@@ -224,8 +246,8 @@ def test_one_epoch_training_checkpoint_and_single_image_inference(tmp_path):
             mask = np.zeros_like(image)
             mask[10:22, 10:22] = 255
             name = f"sample_{index}.png"
-            cv2.imwrite(str(tmp_path / "data" / split / "images" / name), image)
-            cv2.imwrite(str(tmp_path / "data" / split / "masks" / name), mask)
+            write_image(str(tmp_path / "data" / split / "images" / name), image)
+            write_image(str(tmp_path / "data" / split / "masks" / name), mask)
 
     config = {
         "data": {

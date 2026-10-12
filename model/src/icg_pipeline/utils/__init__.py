@@ -58,7 +58,9 @@ def set_seed(seed: int = 42):
 
 def get_device(device_config: Dict[str, Any]) -> torch.device:
     """Get torch device based on configuration."""
-    if device_config.get('use_cuda', True) and torch.cuda.is_available():
+    if device_config.get('use_cuda', True):
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA requested but unavailable; install a compatible PyTorch CUDA build or explicitly use --device cpu")
         device_id = device_config.get('device_id', 0)
         return torch.device(f'cuda:{device_id}')
     return torch.device('cpu')
@@ -75,9 +77,12 @@ def save_checkpoint(state: Dict[str, Any], filepath: str):
     torch.save(state, filepath)
 
 
-def load_checkpoint(filepath: str, model: torch.nn.Module, optimizer: Optional[torch.optim.Optimizer] = None) -> Dict[str, Any]:
+def load_checkpoint(filepath: str, model: torch.nn.Module, optimizer: Optional[torch.optim.Optimizer] = None,
+                    expected_training_mode: Optional[str] = None) -> Dict[str, Any]:
     """Load model checkpoint."""
-    checkpoint = torch.load(filepath, map_location='cpu')
+    checkpoint = torch.load(filepath, map_location='cpu', weights_only=True)
+    if expected_training_mode and checkpoint.get('training_mode', 'train_val') != expected_training_mode:
+        raise ValueError('Checkpoint training mode differs; do not mix train-fit and validation histories')
     model.load_state_dict(checkpoint['model_state_dict'])
     if optimizer and 'optimizer_state_dict' in checkpoint:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])

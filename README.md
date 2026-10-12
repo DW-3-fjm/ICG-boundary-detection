@@ -36,7 +36,7 @@ ICG-boundary-detection/
 
 ## 当前算法基线
 
-`model/` 是独立的 U-Net 前景分割 + Lucas–Kanade 光流研究原型，使用双类别 logits 的 softmax/argmax，并在视频中区分分割支持、光流传播与跟踪失败。当前没有临床训练/验证数据；荧光区域不应被直接等同于手术边界，系统也不能用于临床决策。安装、训练、推理、评估与四人交接事项见 [`model/README.md`](model/README.md) 和 [`model/HANDOFF.md`](model/HANDOFF.md)。
+`model/` 是独立的 U-Net 前景分割 + Farneback 光流研究原型，使用双类别 logits 的 softmax/argmax，并在视频中区分分割支持、光流传播与跟踪失败。项目以经确认的多边形内部为目标区域，Q/Z/H 是显像前/中/后的阶段，L 为器械标注；目标是显示指定区域边界，并研究荧光消退后的边界保持。仓库不包含患者数据或权重；本地训练集拟合不能证明独立患者效果或视频跟踪能力，系统也不能用于临床决策。安装、训练、推理、评估与四人交接事项见 [`model/README.md`](model/README.md) 和 [`model/HANDOFF.md`](model/HANDOFF.md)。
 
 ## 分支规则
 
