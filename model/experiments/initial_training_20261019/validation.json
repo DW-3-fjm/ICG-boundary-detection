@@ -1,0 +1,28 @@
+{
+  "validation_date": "2026-10-20",
+  "pytest": {
+    "passed": 66,
+    "failed": 0,
+    "new_initial_training_tests": 8,
+    "data_type": "synthetic software fixtures only"
+  },
+  "private_preparation_check": {
+    "train": 15,
+    "val": 5,
+    "test": 5,
+    "empty_or_full_masks": 0,
+    "patient_split_verified": false,
+    "decoded_files_identical_to_historical_preparation": 100,
+    "compared_kinds": ["fullres images", "fullres masks", "resized images", "resized masks"]
+  },
+  "portable_config_hyperparameters_match_historical_config": true,
+  "new_clinical_training_performed_for_this_publication": false,
+  "new_clinical_test_evaluation_performed_for_this_publication": false,
+  "public_record_scan": {
+    "private_source_folder_names": 0,
+    "machine_user_paths": 0,
+    "clinical_arrays_or_weights": 0,
+    "conflict_markers": 0,
+    "local_documentation_links_resolve": true
+  }
+}

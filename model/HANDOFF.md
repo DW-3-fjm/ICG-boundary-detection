@@ -1,5 +1,9 @@
 # Four-person research handoff
 
+## Initial-training review package
+
+The actual historical wrapper scripts, portable preparation/training/original-resolution evaluation commands, anonymous split, epoch history and per-image numerical results are now documented in [初次训练 PR 实验记录](experiments/initial_training_20261019/README.md). Start there to reproduce or review the 2026-10-19 Z-only pilot. Clinical images, masks, identifying source maps and weights remain local. The source-batch holdout is within one conservatively reported patient and must not be relabelled as an independent-patient split.
+
 This work is an engineering baseline, not clinical validation. The code predicts the foreground class in the supplied masks. Before training, the clinical lead and project owner must agree whether that foreground is an ICG region, an intersegmental plane, or a specifically defined boundary representation. Do not treat one as another implicitly.
 
 ## Work to complete before training

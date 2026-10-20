@@ -1,0 +1,77 @@
+# Portable counterpart of the 2026-10-19 Z-only pilot. This file contains no patient paths.
+# Relative paths are resolved from model/. Use new output directories for a new run.
+data:
+  train_data_dir: data/initial_training_20261019/resized/train
+  val_data_dir: data/initial_training_20261019/resized/val
+  test_data_dir: data/initial_training_20261019/resized/test
+  image_size: [288, 512]
+  in_channels: 3
+  out_channels: 2
+  annotation: Existing polygon interior; Z primary; Q/H reserved; L excluded
+  batch_size: 5
+  num_workers: 0
+  pin_memory: true
+  augmentations:
+    horizontal_flip: 0.5
+    vertical_flip: 0.0
+    rotation: 8
+    brightness: 0.05
+    contrast: 0.1
+    gaussian_noise: 0.005
+model:
+  name: unet
+  in_channels: 3
+  out_channels: 2
+  base_filters: 32
+  depth: 4
+  dropout: 0.1
+  use_batchnorm: true
+training:
+  epochs: 120
+  seed: 42
+  learning_rate: 0.0003
+  weight_decay: 1.0e-5
+  optimizer: adamw
+  scheduler: cosine_annealing
+  scheduler_params:
+    T_max: 120
+    eta_min: 1.0e-6
+  loss_function: dice_ce
+  loss_params:
+    dice_weight: 0.5
+    ce_weight: 0.5
+  gradient_clip: 1.0
+  mixed_precision: true
+  early_stopping:
+    patience: 30
+    min_delta: 0.001
+  checkpoint_dir: checkpoints/initial_training_20261019
+  save_top_k: 1
+  monitor_metric: val_dice
+  monitor_mode: max
+  overfit_only: false
+inference:
+  model_path: checkpoints/initial_training_20261019/best_model.pt
+  output_dir: predictions/initial_training_20261019
+  save_overlay: true
+  overlay_alpha: 0.5
+  min_contour_area: 100
+  min_mean_probability: 0.55
+tracking:
+  enabled: true
+  num_points: 100
+evaluation:
+  metrics: [dice, iou, precision, recall, hausdorff, hausdorff_95, surface_distance]
+logging:
+  level: INFO
+  log_dir: logs/initial_training_20261019
+  use_tensorboard: false
+device:
+  use_cuda: true
+  device_id: 0
+experiment:
+  scope: within_patient_source_batch_holdout_NOT_independent_patient
+  split_manifest: experiments/initial_training_20261019/split_manifest.csv
+  prepared_data_dir: data/initial_training_20261019
+  primary_phase: Z
+  patient_split_verified: false

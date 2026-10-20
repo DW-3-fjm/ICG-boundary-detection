@@ -60,6 +60,8 @@ Images must be uint8 grayscale or three-channel data. Masks must be uint8 single
 
 ## Commands
 
+初次训练的实际编排脚本、Z 主任务数据划分、公开配置与结果见 [初次训练 PR 实验记录](experiments/initial_training_20261019/README.md)。可移植入口为 `scripts/initial_training.py prepare|train|evaluate`；原始数据线下交接，不在仓库内。该入口单独保留原图评价路径，避免把缩小图指标与历史原图指标混用。
+
 Run these from `model/`; scripts also accept absolute configuration/data paths.
 
 ```powershell
@@ -96,7 +98,7 @@ Contour screening samples foreground probabilities at the native model pixels co
 
 Image evaluation reports foreground Dice/IoU and configured boundary metrics in pixels. Video evaluation requires independent frame-level reference contours. Call `Evaluator.evaluate_tracking_sequence(results, reference_contours, elapsed_seconds=...)`; use `None` for frames without reference annotation. This reports symmetric nearest-contour distance, contour HD95, failure frequency, elapsed-since-ICG-loss drift grouped by supplied time, and latency/FPS when present. Never use tracker output as ground truth. FPS is measured by this implementation and is not a real-time guarantee.
 
-No suitable clinical videos, procedure identifiers, reviewed masks, or independently annotated tracking contours are included here. Consequently this repository contains **no clinical performance results**. The default synthetic generator creates random vessel-like shapes and cannot train or validate lung intersegmental-plane recognition.
+No patient images, procedure identifiers, masks, or independently annotated tracking videos are included here. The repository includes anonymous numerical records of the [initial within-patient pilot](experiments/initial_training_20261019/README.md), **not independent-patient or clinical validation**. The default synthetic generator creates random vessel-like shapes for software tests and cannot establish clinical performance.
 
 ## Known limitations
 

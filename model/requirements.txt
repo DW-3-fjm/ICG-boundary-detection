@@ -12,6 +12,7 @@ scipy>=1.10.0
 # Training utilities
 tqdm>=4.65.0
 PyYAML>=6.0
+Pillow>=10.0.0
 tensorboard>=2.14.0
 
 # Test runner

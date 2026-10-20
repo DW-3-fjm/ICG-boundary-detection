@@ -1,0 +1,15 @@
+{
+  "initialized_at": "2026-10-19T10:28:06+08:00",
+  "model_initialized_from_scratch": true,
+  "checkpoint_loaded_before_training": false,
+  "optimizer_initial_state_entries": 0,
+  "initial_epoch": 0,
+  "initial_model_state_sha256": "4dfe864e72f5d4c9ea0a0a1376932f613355742eb512941c388c6e6962e9d752",
+  "config_sha256": "d29ad470b220bdf954a91cf16780770f7862e1a9596e50896900a4674cd179dc",
+  "split_manifest_sha256": "5285dc2f941acce67bd7597ca0c430f322a12b73cd2bd80f534a1fab4b6335cc",
+  "torch_version": "2.7.1+cu128",
+  "cuda_device": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
+  "seed": 42,
+  "config_hash_scope": "Original local YAML bytes, not the portable public YAML",
+  "manifest_hash_scope": "Original private JSON record serialization, not the public CSV bytes"
+}

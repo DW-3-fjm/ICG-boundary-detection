@@ -38,6 +38,13 @@ ICG-boundary-detection/
 
 `model/` 是独立的 U-Net 前景分割 + Farneback 光流研究原型，使用双类别 logits 的 softmax/argmax，并在视频中区分分割支持、光流传播与跟踪失败。项目以经确认的多边形内部为目标区域，Q/Z/H 是显像前/中/后的阶段，L 为器械标注；目标是显示指定区域边界，并研究荧光消退后的边界保持。仓库不包含患者数据或权重；本地训练集拟合不能证明独立患者效果或视频跟踪能力，系统也不能用于临床决策。安装、训练、推理、评估与四人交接事项见 [`model/README.md`](model/README.md) 和 [`model/HANDOFF.md`](model/HANDOFF.md)。
 
+## 初次训练 PR 与复现记录
+
+初次训练与代码审查见 [PR #75](https://github.com/DW-3-fjm/ICG-boundary-detection/pull/75)，集成目标为 `develop`。
+训练脚本、公开配置、匿名数据划分、数值曲线和全部逐图指标已整理在 [初次训练实验目录](model/experiments/initial_training_20261019/README.md)。
+其中区分了 2026-10-12 的训练集拟合与 2026-10-19 的 Z 阶段来源组留出实验；后者为 15/5/5 图片划分，测试 Dice 0.5729，仍非独立患者或动态视频验证。
+数据规模、标签含义和原始数据交接要求见 [数据集说明](model/experiments/initial_training_20261019/DATASET_CARD.md)。原始患者数据及权重继续不上传 GitHub。
+
 ## 分支规则
 
 - `main`:**稳定交付分支**,只有全部通过测试的代码才合并进来
@@ -53,8 +60,8 @@ ICG-boundary-detection/
 
 数据只放本地或网盘,位置在此说明(只写路径,不传数据):
 
-- 原始图像:`<填写网盘链接或本地路径>`
-- 标注图:`<填写位置>`
+- 原始图像与 LabelMe 标注：由项目组线下交接，准备到本地私有目录；不在公开 README 写患者来源路径或未经授权的访问链接。
+- 仓库内仅提供 [匿名划分与数据准备说明](model/experiments/initial_training_20261019/DATASET_CARD.md)，转换后的图像、mask 与私有映射放入已忽略的 `model/data/`。
 
 ## 协作约定
 

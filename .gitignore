@@ -36,3 +36,5 @@ env/
 Thumbs.db
 
 model/reference/
+*.private.json
+*.private.csv
