@@ -126,6 +126,9 @@ class ICGPredictor:
         if status.startswith("tracking_failed"):
             cv2.putText(overlay, "TRACKING FAILED - boundary not displayed", (10, 28),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        elif status == "uninitialized_no_reliable_segmentation":
+            cv2.putText(overlay, "WAITING FOR RELIABLE INITIALIZATION", (10, 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
         elif status == "propagated":
             cv2.putText(overlay, "PROPAGATED - not a new observation", (10, 28),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 160, 0), 2)
@@ -236,8 +239,6 @@ class ICGPredictor:
                     "processing_time_ms": (time.perf_counter() - started) * 1000,
                 })
                 if writer is not None:
-                    if result["tracked_contour"] is None and result.get("selected_contour") is not None:
-                        result["tracking_status"] = "tracking_failed_untrusted_segmentation"
                     writer.write(self.create_overlay(frame, result))
                 # Do not retain source-resolution masks/probabilities for an entire video.
                 results.append({k: v for k, v in result.items() if k not in

@@ -252,6 +252,9 @@ def evaluate_tracking(
     frame_indices: Optional[List[int]] = None
 ) -> Dict[str, float]:
     """Evaluate contour tracking performance.
+
+    ``mean_hausdorff_95_contour_distance`` is the arithmetic mean of per-frame
+    contour HD95 values for successful pairs, not a pooled sequence percentile.
     
     Args:
         tracked_contours: List of tracked contours per frame
@@ -306,6 +309,8 @@ def evaluate_tracking(
     if not valid_metrics:
         return {
             'mean_contour_distance': float('inf'),
+            'median_contour_distance': float('inf'),
+            'mean_hausdorff_95_contour_distance': float('inf'),
             'mean_center_distance': float('inf'),
             'mean_area_ratio': 0.0,
             'tracking_success_rate': 0.0
@@ -314,6 +319,8 @@ def evaluate_tracking(
     return {
         'mean_contour_distance': float(np.mean([m['mean_contour_distance'] for m in valid_metrics])),
         'median_contour_distance': float(np.median([m['median_contour_distance'] for m in valid_metrics])),
+        'mean_hausdorff_95_contour_distance': float(np.mean([
+            m['hausdorff_95_contour_distance'] for m in valid_metrics])),
         'mean_center_distance': float(np.mean([m['center_distance'] for m in valid_metrics])),
         'mean_area_ratio': float(np.mean([m['area_ratio'] for m in valid_metrics])),
         'tracking_success_rate': len(valid_metrics) / len(frame_metrics)
@@ -413,7 +420,10 @@ class Evaluator:
         else:
             annotated.update({
                 'mean_contour_distance': float('nan'),
-                'hausdorff_95_contour_distance': float('nan'),
+                'median_contour_distance': float('nan'),
+                'mean_hausdorff_95_contour_distance': float('nan'),
+                'mean_center_distance': float('nan'),
+                'mean_area_ratio': float('nan'),
             })
         # evaluate_tracking receives successful pairs only; its local success
         # fraction must not erase failed frames with independent references.
