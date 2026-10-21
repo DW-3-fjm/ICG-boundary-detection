@@ -159,3 +159,6 @@ class OpticalFlowTracker:
         self.prev_frame = gray.copy()
         self.points = propagated
         return TrackedContour(propagated, "propagated", mean_error, fraction, self.frame_idx)
+
+
+from .gated import GatedContourTracker

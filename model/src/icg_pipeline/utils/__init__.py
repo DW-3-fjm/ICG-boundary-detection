@@ -8,13 +8,33 @@ from typing import Dict, Any, Optional
 import torch
 import numpy as np
 import random
+import math
+import json
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
     config_file = Path(config_path).resolve()
-    with config_file.open('r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
+    def read_mapping(path, active):
+        if path in active:
+            raise ValueError(f'Circular configuration inheritance: {path}')
+        with path.open('r', encoding='utf-8') as f:
+            values = yaml.safe_load(f)
+        if not isinstance(values, dict):
+            raise ValueError(f'Configuration must contain a mapping: {path}')
+        parent = values.pop('extends', None)
+        if not parent:
+            return values
+        base = read_mapping((path.parent / parent).resolve(), active | {path})
+        def merge(left, right):
+            for key, value in right.items():
+                if key != 'loss_params' and isinstance(value, dict) and isinstance(left.get(key), dict):
+                    merge(left[key], value)
+                else:
+                    left[key] = value
+            return left
+        return merge(base, values)
+    config = read_mapping(config_file, set())
     if not isinstance(config, dict):
         raise ValueError(f"Configuration must contain a YAML mapping: {config_file}")
     for section, keys in {
@@ -35,15 +55,16 @@ def setup_logging(log_dir: str, level: str = "INFO") -> logging.Logger:
     log_path = Path(log_dir)
     log_path.mkdir(parents=True, exist_ok=True)
     
-    logging.basicConfig(
-        level=getattr(logging, level.upper()),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_path / 'pipeline.log'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-    return logging.getLogger(__name__)
+    logger = logging.getLogger(f'icg_pipeline.run.{log_path.resolve()}')
+    for handler in logger.handlers[:]:
+        handler.close()
+        logger.removeHandler(handler)
+    logger.setLevel(getattr(logging, level.upper()))
+    logger.propagate = False
+    for handler in (logging.FileHandler(log_path / 'pipeline.log', encoding='utf-8'), logging.StreamHandler(sys.stdout)):
+        handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logger.addHandler(handler)
+    return logger
 
 
 def set_seed(seed: int = 42):
@@ -77,11 +98,30 @@ def save_checkpoint(state: Dict[str, Any], filepath: str):
 
 def load_checkpoint(filepath: str, model: torch.nn.Module, optimizer: Optional[torch.optim.Optimizer] = None) -> Dict[str, Any]:
     """Load model checkpoint."""
-    checkpoint = torch.load(filepath, map_location='cpu')
+    checkpoint = torch.load(filepath, map_location='cpu', weights_only=True)
     model.load_state_dict(checkpoint['model_state_dict'])
     if optimizer and 'optimizer_state_dict' in checkpoint:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     return checkpoint
+
+
+def write_json(filepath, value):
+    """Strict JSON: null nonfinite numbers; callers retain explicit failure counts."""
+    def safe(obj):
+        if isinstance(obj, dict):
+            return {str(k): safe(v) for k, v in obj.items()}
+        if isinstance(obj, (tuple, list)):
+            return [safe(v) for v in obj]
+        if isinstance(obj, np.ndarray):
+            return safe(obj.tolist())
+        if isinstance(obj, np.generic):
+            return safe(obj.item())
+        if isinstance(obj, float) and not math.isfinite(obj):
+            return None
+        return obj
+    destination = Path(filepath)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(safe(value), indent=2, allow_nan=False), encoding='utf-8')
 
 
 class AverageMeter:

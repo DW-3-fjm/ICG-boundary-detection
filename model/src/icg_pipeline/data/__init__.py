@@ -13,9 +13,62 @@ logger = logging.getLogger(__name__)
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
 
 
+def read_image(path, grayscale=False):
+    """Read Unicode Windows paths without losing the source coordinate system."""
+    image = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8),
+                         cv2.IMREAD_GRAYSCALE if grayscale else cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError(f'Could not load image: {path}')
+    return image
+
+
+def write_image(path, image):
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    ok, encoded = cv2.imencode(destination.suffix, image)
+    if not ok:
+        raise OSError(f'Could not encode image: {destination}')
+    encoded.tofile(str(destination))
+
+
+def normalize_rgb_or_gray(image, channels, normalization='legacy'):
+    array = image.astype(np.float32) / 255.0
+    if channels == 1:
+        array = array[..., None]
+    if normalization == 'imagenet':
+        if channels != 3:
+            raise ValueError('imagenet normalization requires 3 RGB channels')
+        array = (array - np.array([.485, .456, .406], np.float32)) / np.array([.229, .224, .225], np.float32)
+    elif normalization == 'legacy':
+        array = (array - .5) / .5
+    else:
+        raise ValueError(f'Unknown normalization: {normalization}')
+    return torch.from_numpy(np.ascontiguousarray(array.transpose(2, 0, 1)))
+
+
+def augment_pair(image, mask, aug):
+    h, w = mask.shape
+    for key, axis in (('horizontal_flip', 1), ('vertical_flip', 0)):
+        if np.random.random() < float(aug.get(key, 0)):
+            image, mask = cv2.flip(image, axis), cv2.flip(mask, axis)
+    rotation = float(aug.get('rotation', 0))
+    if rotation:
+        matrix = cv2.getRotationMatrix2D(((w-1)/2, (h-1)/2), np.random.uniform(-rotation, rotation), 1)
+        image = cv2.warpAffine(image, matrix, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
+        mask = cv2.warpAffine(mask, matrix, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_REFLECT_101)
+    array = image.astype(np.float32) / 255
+    contrast, brightness = float(aug.get('contrast', 0)), float(aug.get('brightness', 0))
+    array = (array-.5)*np.random.uniform(1-contrast, 1+contrast)+.5
+    array += np.random.uniform(-brightness, brightness)
+    noise = float(aug.get('gaussian_noise', 0))
+    if noise:
+        array += np.random.normal(0, noise, array.shape)
+    return np.clip(np.rint(array*255), 0, 255).astype(np.uint8), mask
+
+
 def _read_image(path: Path, channels: int) -> np.ndarray:
     mode = cv2.IMREAD_GRAYSCALE if channels == 1 else cv2.IMREAD_COLOR
-    image = cv2.imread(str(path), mode)
+    image = read_image(path, grayscale=channels == 1)
     if image is None:
         raise ValueError(f"Could not load image: {path}")
     if channels == 3:
@@ -27,6 +80,7 @@ def preprocess_image(
     image: np.ndarray,
     image_size: Tuple[int, int] = (256, 256),
     channels: int = 1,
+    normalization: str = 'legacy',
 ) -> torch.Tensor:
     """Convert an OpenCV image into normalized CHW model input (size is H, W)."""
     if channels not in (1, 3):
@@ -39,11 +93,7 @@ def preprocess_image(
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     interpolation = cv2.INTER_AREA if image.shape[0] > image_size[0] else cv2.INTER_LINEAR
     image = cv2.resize(image, (image_size[1], image_size[0]), interpolation=interpolation)
-    if channels == 1:
-        image = image[..., np.newaxis]
-    image = image.astype(np.float32) / 255.0
-    image = (image - 0.5) / 0.5
-    return torch.from_numpy(np.ascontiguousarray(image.transpose(2, 0, 1))).unsqueeze(0)
+    return normalize_rgb_or_gray(image, channels, normalization).unsqueeze(0)
 
 
 class ICGDataset(Dataset):
@@ -57,11 +107,13 @@ class ICGDataset(Dataset):
         is_train: bool = True,
         channels: int = 1,
         require_masks: bool = True,
+        normalization: str = 'legacy',
     ):
         self.data_dir = Path(data_dir)
         self.image_size = tuple(image_size)
         self.is_train = is_train
         self.channels = channels
+        self.normalization = normalization
         image_dir, mask_dir = self.data_dir / "images", self.data_dir / "masks"
         if image_dir.is_dir() and mask_dir.is_dir():
             pairs = [
@@ -103,7 +155,7 @@ class ICGDataset(Dataset):
         image = _read_image(image_path, self.channels)
         if mask_path is None:
             raise ValueError(f"Missing annotation for training sample: {image_path}")
-        mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+        mask = read_image(mask_path, grayscale=True)
         if mask is None:
             raise ValueError(f"Could not load mask: {mask_path}")
         if mask.shape != image.shape[:2]:
@@ -112,7 +164,9 @@ class ICGDataset(Dataset):
         height, width = self.image_size
         image = cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA if image.shape[0] > height else cv2.INTER_LINEAR)
         mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_NEAREST)
-        if self.is_train:
+        if self.is_train and isinstance(self.augmentations, dict):
+            image, mask = augment_pair(image, mask, self.augmentations)
+        elif self.is_train:
             if np.random.random() < 0.5:
                 image, mask = cv2.flip(image, 1), cv2.flip(mask, 1)
             if np.random.random() < 0.5:
@@ -120,7 +174,7 @@ class ICGDataset(Dataset):
             if self.image_size[0] == self.image_size[1]:
                 rotations = np.random.randint(4)
                 image, mask = np.rot90(image, rotations), np.rot90(mask, rotations)
-        if self.augmentations is not None:
+        if self.is_train and callable(self.augmentations):
             transformed = self.augmentations(image=image, mask=mask)
             image, mask = transformed["image"], transformed["mask"]
             if isinstance(image, torch.Tensor):
@@ -132,8 +186,7 @@ class ICGDataset(Dataset):
                 mask_tensor = torch.as_tensor(mask).long()
                 return {"image": image_tensor, "mask": (mask_tensor > 0).long(), "image_path": str(image_path)}
         image = np.ascontiguousarray(image)
-        image_tensor = torch.from_numpy(image.transpose(2, 0, 1) if image.ndim == 3 else image[np.newaxis]).float()
-        image_tensor = (image_tensor / 255.0 - 0.5) / 0.5
+        image_tensor = normalize_rgb_or_gray(image, self.channels, self.normalization)
         return {
             "image": image_tensor,
             "mask": torch.from_numpy((np.asarray(mask) > 0).astype(np.int64)),
@@ -141,29 +194,26 @@ class ICGDataset(Dataset):
         }
 
 
-def get_dataloaders(config: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, DataLoader]:
+def get_dataloader(config: Dict[str, Any], split: str, training: bool = False) -> DataLoader:
+    if split not in ('train', 'val', 'test'):
+        raise ValueError(f'Unknown split: {split}')
+    if training and split != 'train':
+        raise ValueError('Only the training split may be augmented')
     data = config["data"]
     channels = int(data.get("in_channels", config.get("model", {}).get("in_channels", 1)))
-    options = {
-        "image_size": tuple(data["image_size"]),
-        "channels": channels,
-    }
-    datasets = [
-        ICGDataset(data[key], is_train=(key == "train_data_dir"), **options)
-        for key in ("train_data_dir", "val_data_dir", "test_data_dir")
-    ]
-    loaders = [
-        DataLoader(
-            dataset,
-            batch_size=data["batch_size"],
-            shuffle=index == 0,
-            num_workers=data.get("num_workers", 0),
-            pin_memory=data.get("pin_memory", False),
-            drop_last=index == 0 and len(dataset) >= data["batch_size"],
-        )
-        for index, dataset in enumerate(datasets)
-    ]
-    return tuple(loaders)
+    if channels != config.get('model', {}).get('in_channels', channels):
+        raise ValueError('data.in_channels and model.in_channels must match')
+    dataset = ICGDataset(data[f'{split}_data_dir'], image_size=tuple(data['image_size']),
+                         channels=channels, is_train=training,
+                         augmentations=data.get('augmentations') if training else None,
+                         normalization=data.get('normalization', 'legacy'))
+    return DataLoader(dataset, batch_size=data['batch_size'], shuffle=training,
+                      num_workers=data.get('num_workers', 0), pin_memory=data.get('pin_memory', False),
+                      drop_last=False)
+
+
+def get_dataloaders(config: Dict[str, Any]) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    return tuple(get_dataloader(config, split, training=split == 'train') for split in ('train', 'val', 'test'))
 
 
 def postprocess_mask(

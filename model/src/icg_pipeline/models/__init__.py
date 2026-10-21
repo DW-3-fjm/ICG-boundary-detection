@@ -288,9 +288,20 @@ class AttentionGate(nn.Module):
         return x * psi
 
 
-def create_model(config: dict) -> UNet:
+def create_model(config: dict, load_pretrained: bool = True) -> nn.Module:
     """Factory function to create U-Net model from config."""
     model_config = config['model']
+    name = model_config.get('name', 'unet')
+    if name == 'unet_resnet18':
+        from .resnet_unet import ResNetUNet
+        return ResNetUNet(
+            in_channels=model_config.get('in_channels', 3),
+            out_channels=model_config.get('out_channels', 2),
+            encoder_weights=model_config.get('encoder_weights', 'IMAGENET1K_V1') if load_pretrained else None,
+            freeze_encoder_batchnorm=model_config.get('freeze_encoder_batchnorm', True),
+            dropout=model_config.get('dropout', .1))
+    if name != 'unet':
+        raise ValueError(f'Unknown model: {name}')
     
     if model_config.get('use_attention', False):
         model = UNetWithAttention(

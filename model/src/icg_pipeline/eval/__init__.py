@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from typing import Any, Dict, List, Tuple, Optional
 from scipy.spatial.distance import directed_hausdorff
+from scipy.spatial import cKDTree
 import cv2
 import logging
 
@@ -118,12 +119,8 @@ def compute_hausdorff_distance_95(pred: np.ndarray, target: np.ndarray) -> float
         return float('inf')
     
     # Compute all pairwise distances
-    from scipy.spatial.distance import cdist
-    distances = cdist(pred_contours, target_contours)
-    
-    # Get 95th percentile of minimum distances
-    min_dist_pred = distances.min(axis=1)
-    min_dist_target = distances.min(axis=0)
+    min_dist_pred = cKDTree(target_contours).query(pred_contours)[0]
+    min_dist_target = cKDTree(pred_contours).query(target_contours)[0]
     
     hd95_pred = np.percentile(min_dist_pred, 95)
     hd95_target = np.percentile(min_dist_target, 95)
@@ -148,11 +145,8 @@ def compute_surface_distance(pred: np.ndarray, target: np.ndarray) -> Dict[str, 
             'max_surface_distance': float('inf')
         }
     
-    from scipy.spatial.distance import cdist
-    distances = cdist(pred_contours, target_contours)
-    
-    min_dist_pred = distances.min(axis=1)
-    min_dist_target = distances.min(axis=0)
+    min_dist_pred = cKDTree(target_contours).query(pred_contours)[0]
+    min_dist_target = cKDTree(pred_contours).query(target_contours)[0]
     all_distances = np.concatenate([min_dist_pred, min_dist_target])
     
     return {
@@ -168,7 +162,7 @@ def _get_contour_points(mask: np.ndarray) -> np.ndarray:
     contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     if not contours:
         return np.array([])
-    points = np.vstack(contours).squeeze()
+    points = np.vstack(contours).reshape(-1, 2)
     if points.ndim == 1:
         points = points.reshape(1, -1)
     return points
@@ -222,6 +216,8 @@ def evaluate_segmentation(
     # Ensure binary
     pred_bin = (pred > 0).astype(np.uint8)
     target_bin = (target > 0).astype(np.uint8)
+    if pred_bin.shape != target_bin.shape:
+        raise ValueError('Prediction and reference must use the same original coordinates')
     
     if 'dice' in metrics:
         results['dice'] = compute_dice(pred_bin, target_bin)
@@ -241,6 +237,11 @@ def evaluate_segmentation(
         results['hausdorff_95'] = compute_hausdorff_distance_95(pred_bin, target_bin)
     if 'surface_distance' in metrics:
         results.update(compute_surface_distance(pred_bin, target_bin))
+    if 'area_ratio' in metrics:
+        reference_area = int(target_bin.sum())
+        predicted_area = int(pred_bin.sum())
+        results['area_ratio'] = (predicted_area/reference_area if reference_area else
+                                 (1.0 if predicted_area == 0 else float('inf')))
     
     return results
 
@@ -349,11 +350,15 @@ class Evaluator:
         # Aggregate
         aggregated = {}
         for key in all_metrics[0].keys():
-            values = [m[key] for m in all_metrics if np.isfinite(m[key])]
+            all_values = [m[key] for m in all_metrics]
+            values = [v for v in all_values if np.isfinite(v)]
+            nonfinite = len(all_values) - len(values)
+            aggregated[f'nonfinite_count_{key}'] = nonfinite
             if values:
-                aggregated[f'mean_{key}'] = float(np.mean(values))
-                aggregated[f'std_{key}'] = float(np.std(values))
-                aggregated[f'median_{key}'] = float(np.median(values))
+                aggregated[f'mean_{key}'] = float('inf') if nonfinite else float(np.mean(values))
+                aggregated[f'std_{key}'] = float('inf') if nonfinite else float(np.std(values))
+                aggregated[f'median_{key}'] = float(np.median(all_values))
+                aggregated[f'finite_mean_{key}'] = float(np.mean(values))
             else:
                 aggregated[f'mean_{key}'] = float('inf')
                 aggregated[f'std_{key}'] = 0.0
@@ -387,6 +392,7 @@ class Evaluator:
             and len(r['tracked_contour']) >= 3 and len(gt) >= 3
         ]
         statuses = [r.get('tracking_status', 'unknown') for r in tracked_results]
+        reference_count = sum(gt is not None and len(gt) >= 3 for gt in ground_truth_contours)
         failure_count = sum(
             status.startswith('tracking_failed')
             or status == 'uninitialized_no_reliable_segmentation'
@@ -395,7 +401,9 @@ class Evaluator:
         annotated = {
             'tracking_failure_frequency': failure_count / len(statuses) if statuses else 0.0,
             'tracking_failure_count': failure_count,
-            'annotated_frame_count': len(valid_indices),
+            'annotated_frame_count': reference_count,
+            'evaluated_frame_count': len(valid_indices),
+            'distance_metrics_condition': 'successful_annotated_frames_only',
             'frame_count': len(statuses),
         }
         if valid_indices:
@@ -407,6 +415,9 @@ class Evaluator:
                 'mean_contour_distance': float('nan'),
                 'hausdorff_95_contour_distance': float('nan'),
             })
+        # evaluate_tracking receives successful pairs only; its local success
+        # fraction must not erase failed frames with independent references.
+        annotated['tracking_success_rate'] = len(valid_indices)/reference_count if reference_count else float('nan')
         if elapsed_seconds is not None:
             drift: Dict[str, List[float]] = {}
             for index in valid_indices:
@@ -427,3 +438,60 @@ class Evaluator:
             annotated['mean_processing_time_ms'] = float(np.mean(processing_times))
             annotated['frames_per_second'] = 1000.0 / annotated['mean_processing_time_ms']
         return annotated
+
+
+def evaluate_source_split(config, split, predictor=None, output_dir=None):
+    """Stream original pairs; never reconstruct inputs from normalized tensors."""
+    from pathlib import Path
+    from ..data import ICGDataset, read_image, write_image
+    from ..inference import ICGPredictor
+    if split not in ('train', 'val', 'test'):
+        raise ValueError(f'Unknown split: {split}')
+    data = config['data']
+    pairs = ICGDataset(data[f'{split}_data_dir'], is_train=False,
+                       image_size=tuple(data['image_size']),
+                       channels=data.get('in_channels', 1)).pairs
+    predictor = predictor or ICGPredictor(config)
+    evaluator = Evaluator(config)
+    rows = []
+    for image_path, mask_path in pairs:
+        image, target = read_image(image_path), read_image(mask_path, grayscale=True)
+        if image.shape[:2] != target.shape:
+            raise ValueError(f'Image/mask size mismatch: {image_path}')
+        prediction = predictor.predict_image(image)
+        row = evaluate_segmentation(prediction['mask'], target, evaluator.metrics_to_compute)
+        row.update(image_path=image_path.name, image_size_hw=list(target.shape),
+                   empty_prediction=not bool(prediction['mask'].any()),
+                   empty_reference=not bool(target.any()))
+        row['nonfinite_metrics'] = [k for k, v in row.items()
+                                    if isinstance(v, (float, np.floating)) and not np.isfinite(v)]
+        rows.append(row)
+        if output_dir is not None:
+            destination = Path(output_dir)
+            write_image(destination / 'masks' / (image_path.stem+'.png'), prediction['mask'])
+            overlay = image.copy()
+            for mask, color in ((target, (0, 255, 0)), (prediction['mask'], (0, 165, 255))):
+                contours, _ = cv2.findContours((mask > 0).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(overlay, contours, -1, color, 2)
+            write_image(destination / 'overlays' / (image_path.stem+'.png'), overlay)
+    metric_rows = [{k: v for k, v in row.items() if isinstance(v, (float, np.floating))} for row in rows]
+    return {'per_sample': rows, 'aggregated': aggregate_metrics(metric_rows), 'sample_count': len(rows),
+            'split': split, 'distance_units': 'original_image_pixels',
+            'scope': 'retrospective_source_group_holdout_not_independent_patients'}
+
+
+def aggregate_metrics(rows):
+    """Keep failure-aware means and separately labelled finite-only diagnostics."""
+    if not rows:
+        raise ValueError('Cannot aggregate an empty dataset')
+    result = {}
+    for key in rows[0]:
+        values = np.asarray([r[key] for r in rows], dtype=float)
+        finite = values[np.isfinite(values)]
+        failures = len(values)-len(finite)
+        result[f'nonfinite_count_{key}'] = failures
+        result[f'mean_{key}'] = float('inf') if failures else float(values.mean())
+        result[f'std_{key}'] = float('inf') if failures else float(values.std())
+        result[f'median_{key}'] = float(np.median(values))
+        result[f'finite_mean_{key}'] = float(finite.mean()) if len(finite) else None
+    return result

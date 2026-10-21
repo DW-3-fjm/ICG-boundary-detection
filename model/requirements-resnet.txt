@@ -1,0 +1,4 @@
+# Optional Pipeline B dependency. Install the torchvision release matching torch:
+# https://pytorch.org/get-started/locally/
+-r requirements.txt
+torchvision>=0.15
