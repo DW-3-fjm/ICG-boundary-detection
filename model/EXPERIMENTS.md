@@ -140,10 +140,16 @@ are reserved for evaluation. Runtime reported by this benchmark covers tracking 
 Tracking success uses all frames with eligible reference contours as its denominator,
 including failed predictions. Contour distances are explicitly conditional on successful
 annotated frames; failure frequency and annotated/evaluated counts are reported separately.
+`mean_hausdorff_95_contour_distance` is the mean of those frames' contour HD95
+values, not a percentile pooled across the sequence. The same metric fields are
+present without successful annotated frames; undefined values serialize as `null`.
 
 The gated tracker initializes above 0.75 mean interior probability, propagates before
-considering corrections, requires 0.8 valid flow points, and accepts corrections only
-above 0.75 probability and 0.5 temporal IoU. Failed motion suppresses the tracked
+considering corrections, and accepts corrections only above 0.75 probability and
+0.5 temporal IoU. The 0.8 valid-flow fraction is a coarse quality gate; closed-contour
+output additionally requires every sample to pass. Otherwise the full boundary is
+suppressed with `failed_incomplete_contour`, preserving sample count/order instead
+of deleting points and bridging missing arcs. Failed motion suppresses the tracked
 boundary until reset/new clip. These are engineering defaults, not calibrated confidence.
 The Python `GatedContourTracker.reset()` method provides explicit reinitialization.
 

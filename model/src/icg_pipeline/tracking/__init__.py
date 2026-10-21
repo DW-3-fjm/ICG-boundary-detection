@@ -23,6 +23,8 @@ class OpticalFlowTracker:
 
     The forward/backward check and image bounds are conservative quality gates,
     not guarantees that a propagated contour remains anatomically correct.
+    Outputs are complete closed contours: any missing sample suppresses the
+    contour rather than connecting across an unsupported arc.
     """
 
     def __init__(
@@ -154,8 +156,18 @@ class OpticalFlowTracker:
             self.points = None
             return TrackedContour(None, "failed_quality_check", mean_error, fraction, self.frame_idx)
 
-        # Retain valid samples only; later segmentation can restore the full contour.
-        propagated = new[valid].astype(np.float32)
+        # Downstream drawing and temporal IoU close this point sequence. Removing
+        # failed samples would bridge unsupported arcs and could cumulatively
+        # shrink the contour while each frame still passed the fraction gate.
+        # Until partial/open contours are supported, require every sample and
+        # preserve their count and ordering. A trusted new initialization can
+        # establish a complete contour again.
+        if not valid.all():
+            self.prev_frame = gray.copy()
+            self.points = None
+            return TrackedContour(None, "failed_incomplete_contour", mean_error, fraction, self.frame_idx)
+
+        propagated = new.astype(np.float32)
         self.prev_frame = gray.copy()
         self.points = propagated
         return TrackedContour(propagated, "propagated", mean_error, fraction, self.frame_idx)

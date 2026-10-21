@@ -85,6 +85,11 @@ Training checkpoints include model/optimizer/scheduler state, epoch, validation 
 
 Tracking limits and gates (`num_points`, minimum valid point count/fraction, forward/backward error, maximum displacement, minimum local texture, and Farneback parameters), contour area, minimum mean foreground probability, image size, channels, and output settings live in `configs/config.yaml`.
 
+Propagation only outputs complete closed contours: every sampled point must pass
+the quality checks. If even one point fails, the contour is suppressed instead of
+deleting samples and joining the remaining points across an unsupported gap.
+This conservative policy may stop display more often under partial occlusion.
+
 ## Evaluation protocol and data requirements
 
 Image evaluation reports foreground Dice/IoU and configured boundary metrics in pixels. Video evaluation requires independent frame-level reference contours. Call `Evaluator.evaluate_tracking_sequence(results, reference_contours, elapsed_seconds=...)`; use `None` for frames without reference annotation. This reports symmetric nearest-contour distance, contour HD95, failure frequency, elapsed-since-ICG-loss drift grouped by supplied time, and latency/FPS when present. Never use tracker output as ground truth. FPS is measured by this implementation and is not a real-time guarantee.
